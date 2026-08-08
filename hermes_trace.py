@@ -1,9 +1,9 @@
 """
 title: Hermes Trace Pipe
 author: Nicolás Ramos
-version: 2.2
+version: 2.3
 license: MIT
-description: Connect Open WebUI to the Hermes Agent API server and translate the agent's reasoning/execution trace (tool calls and results) into standard OpenAI chunks — reasoning_content for the Thinking block and markdown URLs for generated images.
+description: Connect Open WebUI to the Hermes Agent API server and translate the agent's reasoning/execution trace (tool calls and results) into standard OpenAI chunks — reasoning_content for the Thinking block and markdown URLs (with direct download links) for generated images.
 requirements: requests
 """
 
@@ -21,7 +21,7 @@ class Pipeline:
             description="Base URL of the Hermes API server (OpenAI-compatible)",
         )
         HERMES_API_KEY: str = Field(
-            default="__HERMES_API_KEY__",
+            default="266e5532bc2343a1a3715ebacde65b4aa6be9601e512f237af07e269b2539539",
             description="API_SERVER_KEY of the Hermes gateway",
         )
         IMAGES_BASE_URL: str = Field(
@@ -43,14 +43,17 @@ class Pipeline:
             "choices": [{"index": 0, "delta": delta, "finish_reason": None}]
         }
 
-    def _fix_image_paths(self, text: str) -> str:
-        """Convert local image paths to URLs of the static image server."""
-        images_base = self.valves.IMAGES_BASE_URL.rstrip("/")
+    def _image_md(self, name: str) -> str:
+        """Markdown para una imagen: vista inline + enlace de descarga directa."""
+        base = self.valves.IMAGES_BASE_URL.rstrip("/")
+        return f"![{name}]({base}/{name})\n\n[⬇️ Descargar imagen]({base}/download/{name})"
 
+    def _fix_image_paths(self, text: str) -> str:
+        """Convert local image paths to inline markdown + download link."""
         def _replace(match):
             path = match.group(0)
             name = path.split("/")[-1]
-            return f"![{name}]({images_base}/{name})"
+            return self._image_md(name)
 
         return re.sub(r"(/[\w./~-]*\.(?:png|jpe?g|webp|gif))", _replace, text)
 
@@ -68,13 +71,12 @@ class Pipeline:
                 return int(m.group(1)) if m else 0
 
             best = max(names, key=_epoch)
-            yield self._chunk({"content": f"\n\n![{best}]({base}/{best})\n"})
+            yield self._chunk({"content": "\n\n" + self._image_md(best) + "\n"})
         except Exception:
             return
 
     def _images_from_result(self, result_text: str):
-        """Extract image paths from a tool result and attach them as URLs."""
-        base = self.valves.IMAGES_BASE_URL.rstrip("/")
+        """Extract image paths from a tool result and attach them with download links."""
         paths = re.findall(r"([\w/.-]*\.(?:png|jpe?g|webp|gif))", result_text)
         seen = set()
         for p in paths:
@@ -82,7 +84,7 @@ class Pipeline:
             if name in seen:
                 continue
             seen.add(name)
-            yield self._chunk({"content": f"\n\n![{name}]({base}/{name})\n"})
+            yield self._chunk({"content": "\n\n" + self._image_md(name) + "\n"})
 
     def pipe(self, user_message: str, model_id: str, messages: list, body: dict):
         base = self.valves.HERMES_BASE_URL.rstrip("/")
